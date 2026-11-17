@@ -1,10 +1,11 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import create_engine, pool
+from sqlalchemy import Connection, create_engine, pool
 
 from app.core.config import get_settings
 from app.db.base import Base
+from app.models import User  # noqa: F401 -- register users table in metadata
 
 config = context.config
 if config.config_file_name is not None:
@@ -25,15 +26,22 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def migrate_connection(connection: Connection) -> None:
+    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+    with context.begin_transaction():
+        context.run_migrations()
+
+
 def run_migrations_online() -> None:
+    supplied_connection = config.attributes.get("connection")
+    if supplied_connection is not None:
+        migrate_connection(supplied_connection)
+        return
+
     engine = create_engine(get_settings().database_url, poolclass=pool.NullPool)
     try:
         with engine.connect() as connection:
-            context.configure(
-                connection=connection, target_metadata=target_metadata, compare_type=True
-            )
-            with context.begin_transaction():
-                context.run_migrations()
+            migrate_connection(connection)
     finally:
         engine.dispose()
 

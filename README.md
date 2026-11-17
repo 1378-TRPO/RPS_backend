@@ -5,9 +5,9 @@
 
 ## Состояние
 
-Подготовлена основа сервиса: конфигурация, SQLAlchemy, Alembic, health endpoints,
-тесты, CI и шаблон PR. Регистрация, JWT и профиль будут отдельными фичами.
-Предметных таблиц пока нет; первая миграция появится в задаче 1.1.
+Подготовлена основа сервиса и реализована **1.1 — регистрация клиента по email и паролю**.
+Добавлены таблица `users`, миграция `0001`, Argon2 и тесты регистрации.
+JWT, вход и профиль относятся к следующим задачам 1.2 и 1.3.
 
 ## Запуск (Windows / PowerShell)
 
@@ -41,6 +41,7 @@ docker compose ps
 | --- | --- | --- | --- | --- |
 | GET | `/health` | Приложение отвечает, БД не проверяется | Нет | `200 {"status":"ok"}` |
 | GET | `/health/ready` | Проверка соединения с БД (`SELECT 1`) | Нет | `200 {"status":"ok"}` или `503 {"detail":"Database unavailable"}` |
+| POST | `/auth/register` | Регистрация клиента по email и паролю | Нет | `201`, ошибки `409` и `422` |
 
 Readiness проверяет соединение, но не наличие таблиц и актуальность миграций.
 Для PostgreSQL установлен таймаут подключения 5 секунд.
@@ -55,6 +56,51 @@ Invoke-RestMethod http://127.0.0.1:8000/health/ready
 первая продолжает возвращать `200`, а вторая возвращает `503` без реквизитов подключения.
 Верните БД командой `docker compose up -d db`. Обе ручки должны отображаться в Swagger.
 
+### Регистрация — 1.1
+
+Требуется применить миграции. Через Swagger `/docs` или PowerShell:
+
+```powershell
+$registrationBody = @{ email = "client@example.com"; password = "ExamplePass123!" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/auth/register `
+  -ContentType "application/json" -Body $registrationBody
+```
+
+Запрос:
+
+```json
+{"email":"client@example.com","password":"ExamplePass123!"}
+```
+
+Ответ `201 Created` (ID и время формируются сервером):
+
+```json
+{
+  "id": "c905f54c-dfc1-4e91-8d95-1386a340d8de",
+  "email": "client@example.com",
+  "role": "client",
+  "created_at": "2026-11-17T12:00:00Z"
+}
+```
+
+- Email проверяется на формат и длину до 254 символов; внешние пробелы убираются,
+  весь адрес приводится к нижнему регистру. `Client@Example.com` и `client@example.com`
+  считаются одним адресом. Уникальность обеспечена также ограничением БД.
+- Пароль — строка из 8–128 символов, без требований к набору символов.
+  Пробелы пароля сохраняются, пароль не обрезается. В БД хранится только Argon2id-хеш.
+- Разрешены только поля `email`, `password`. Роль всегда `client`;
+  передача `role` (даже `client`), `id`, `password_hash` или других полей даёт `422`.
+- Занятый email → `409 {"detail":"Email already registered"}`;
+  неверные/отсутствующие поля или некорректный JSON → `422`.
+- В ошибках валидации оставлены `type`, `loc`, `msg`, без исходных значений и тела запроса.
+  Пароль и хеш не возвращаются ни в успешном ответе, ни в ошибках валидации.
+- Регистрация пока не выдаёт JWT и не подтверждает email.
+
+Повторите запрос с тем же адресом, затем с `CLIENT@EXAMPLE.COM`: оба дадут `409`.
+Проверьте пароль `short`, неверный email, отсутствие пароля и добавление `role: manager`:
+каждый запрос должен дать `422`, без создания пользователя. Для новых успешных проверок
+выбирайте новый email. Подробные сценарии: `docs/pr/1.1-registration.md`.
+
 ## Команды разработчика
 
 ```powershell
@@ -66,8 +112,10 @@ Invoke-RestMethod http://127.0.0.1:8000/health/ready
 .\.venv\Scripts\python.exe -m pip wheel --no-deps --wheel-dir dist .
 ```
 
-Локальные тесты используют изолированную SQLite in-memory. Для проверки на PostgreSQL
-задайте `TEST_DATABASE_URL` отдельной тестовой БД. CI использует PostgreSQL 17:
+Локальные тесты используют изолированную SQLite in-memory, подготовленную через Alembic.
+Для PostgreSQL задайте `TEST_DATABASE_URL` **отдельной пустой тестовой БД**: тесты применяют
+к ней миграции; данные каждого теста откатываются внешней транзакцией.
+Не направляйте тесты на рабочую БД. CI использует PostgreSQL 17:
 проверки, применение миграций, проверка расхождений схемы и сборка wheel.
 
 Зависимости описаны в `pyproject.toml`, зафиксированы в `uv.lock` и экспортированы
@@ -108,6 +156,7 @@ python -m uv export --frozen --no-emit-project --format requirements-txt -o requ
 **Каждый PR обязательно описывает функционал, ручки, авторизацию, примеры запросов
 и ответов, ожидаемые статусы и сценарии для тестировщика.** Шаблон:
 `.github/pull_request_template.md`. Описание первого PR: `docs/pr/auth-service-setup.md`.
+Текст PR регистрации: `docs/pr/1.1-registration.md`. PR открывает автор проекта вручную.
 
 Критерии связанных User Story пока не предоставлены. Предложения для согласования:
 
@@ -125,3 +174,4 @@ python -m uv export --frozen --no-emit-project --format requirements-txt -o requ
 - [FastAPI: тестирование](https://fastapi.tiangolo.com/tutorial/testing/)
 - [SQLAlchemy: PostgreSQL и psycopg](https://docs.sqlalchemy.org/en/20/dialects/postgresql.html#module-sqlalchemy.dialects.postgresql.psycopg)
 - [Ruff: интеграция с CI](https://docs.astral.sh/ruff/integrations/)
+- [FastAPI: хеширование паролей с pwdlib/Argon2](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/)
