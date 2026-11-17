@@ -1,0 +1,25 @@
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from app.core.config import Settings
+
+
+def test_database_url_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_environment_overrides_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("DATABASE_URL=sqlite:///from_file.db\n", encoding="utf-8")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///from_environment.db")
+    settings = Settings(_env_file=env_file)
+    assert settings.database_url == "sqlite:///from_environment.db"
+
+
+def test_settings_repr_does_not_expose_credentials() -> None:
+    settings = Settings(database_url="postgresql+psycopg://user:secret_password@localhost/db")
+    assert "secret_password" not in repr(settings)
