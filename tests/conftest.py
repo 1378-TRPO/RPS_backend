@@ -9,6 +9,7 @@ from sqlalchemy import Connection, Engine, create_engine, event
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import AuthSettings, get_auth_settings
 from app.db.session import get_db
 from app.main import create_app
 
@@ -54,12 +55,20 @@ def db(engine: Engine) -> Iterator[Session]:
 
 
 @pytest.fixture
-def client(db: Session) -> Iterator[TestClient]:
+def auth_settings() -> AuthSettings:
+    return AuthSettings(
+        _env_file=None, jwt_secret="tests-only-key-that-is-never-used-outside-test-suite"
+    )
+
+
+@pytest.fixture
+def client(db: Session, auth_settings: AuthSettings) -> Iterator[TestClient]:
 
     def override_db() -> Iterator[Session]:
         yield db
 
     application = create_app()
     application.dependency_overrides[get_db] = override_db
+    application.dependency_overrides[get_auth_settings] = lambda: auth_settings
     with TestClient(application) as test_client:
         yield test_client

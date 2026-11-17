@@ -5,9 +5,9 @@
 
 ## Состояние
 
-Подготовлена основа сервиса и реализована **1.1 — регистрация клиента по email и паролю**.
-Добавлены таблица `users`, миграция `0001`, Argon2 и тесты регистрации.
-JWT, вход и профиль относятся к следующим задачам 1.2 и 1.3.
+Реализованы **1.1 — регистрация** и **1.2 — вход по JWT и роли**.
+Доступны роли `client`, `mechanic`, `manager`; сотрудники создаются служебной командой.
+Профиль с именем и телефоном относится к следующей задаче 1.3.
 
 ## Запуск (Windows / PowerShell)
 
@@ -17,6 +17,18 @@ JWT, вход и профиль относятся к следующим зад�
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 Copy-Item .env.example .env
+```
+
+Сгенерируйте секрет подписи JWT и вставьте результат в поле `JWT_SECRET` файла `.env`:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Не перезаписывайте существующий `.env`, если он уже настроен; добавьте новые поля вручную.
+Затем запустите БД, примените миграции и запустите API:
+
+```powershell
 docker compose up -d db
 docker compose ps
 .\.venv\Scripts\python.exe scripts/manage.py migrate
@@ -42,6 +54,8 @@ docker compose ps
 | GET | `/health` | Приложение отвечает, БД не проверяется | Нет | `200 {"status":"ok"}` |
 | GET | `/health/ready` | Проверка соединения с БД (`SELECT 1`) | Нет | `200 {"status":"ok"}` или `503 {"detail":"Database unavailable"}` |
 | POST | `/auth/register` | Регистрация клиента по email и паролю | Нет | `201`, ошибки `409` и `422` |
+| POST | `/auth/login` | Вход по email и паролю, JWT access token | Нет | `200`, ошибки `401`, `422` |
+| GET | `/auth/me` | Текущая учётная запись и актуальная роль | Bearer JWT, любая из трёх ролей | `200`, ошибка `401` |
 
 Readiness проверяет соединение, но не наличие таблиц и актуальность миграций.
 Для PostgreSQL установлен таймаут подключения 5 секунд.
@@ -101,6 +115,72 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/auth/register `
 каждый запрос должен дать `422`, без создания пользователя. Для новых успешных проверок
 выбирайте новый email. Подробные сценарии: `docs/pr/1.1-registration.md`.
 
+### Вход и JWT — 1.2
+
+Сначала зарегистрируйте клиента либо создайте сотрудника командой ниже.
+Вход использует **JSON**, а не OAuth2 form-data:
+
+```powershell
+$loginBody = @{ email = "client@example.com"; password = "ExamplePass123!" } | ConvertTo-Json
+$loginResult = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/auth/login `
+  -ContentType "application/json" -Body $loginBody
+Invoke-RestMethod -Uri http://127.0.0.1:8000/auth/me `
+  -Headers @{ Authorization = "Bearer $($loginResult.access_token)" }
+```
+
+Ответ входа: `200 {"access_token":"<JWT>","token_type":"bearer","expires_in":1800}`.
+Ручка `/auth/me` возвращает `id`, `email`, `role`, `created_at`; это данные учётной записи,
+а не профиль с именем и телефоном из задачи 1.3. Пароль и хеш не возвращаются.
+В Swagger выполните `/auth/login`, скопируйте `access_token`, нажмите **Authorize**
+и вставьте только токен. Затем выполните `/auth/me`.
+
+- Неверный пароль и неизвестный email: одинаковый `401 {"detail":"Invalid email or password"}`.
+- Без Bearer-токена: `401 {"detail":"Not authenticated"}`.
+- Поддельный, просроченный токен или удалённый пользователь:
+  `401 {"detail":"Invalid or expired token"}`. Все ответы `401` содержат `WWW-Authenticate: Bearer`.
+- Некорректный email, пустой/отсутствующий пароль, пароль длиннее 128 символов или лишние поля:
+  `422` без исходных значений. Непустой неправильный пароль длиной до 128 символов даёт `401`.
+- JWT подписывается только HS256. Проверяются подпись, срок, issuer, audience,
+  обязательные `sub`, `role`, `iat`, `exp`, `iss`, `aud` и формат UUID пользователя.
+  В JWT нет email, пароля или хеша.
+- `role` в токене — снимок при входе. Права определяет актуальная роль из БД;
+  понижение роли действует и для уже выданного токена. Удалённый аккаунт теряет доступ.
+- Зависимость `require_roles(...)` подключается к будущим бизнес-ручкам;
+  недостаточная роль даёт `403 {"detail":"Insufficient permissions"}`.
+  Все три роли имеют доступ к `/auth/me`; отдельные бизнес-ручки для них пока не добавлялись.
+- Refresh-токенов, logout и индивидуального отзыва токенов пока нет.
+
+Настройки в `.env`:
+
+| Переменная | Значение |
+| --- | --- |
+| `JWT_SECRET` | Обязательный случайный секрет не короче 32 символов, без значения по умолчанию |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | 30 по умолчанию, диапазон 1–1440 |
+| `JWT_ISSUER` | `rps-auth-service` по умолчанию |
+| `JWT_AUDIENCE` | `rps-api` по умолчанию |
+
+После изменения настроек перезапустите API. Изменение TTL влияет на новые токены;
+смена секрета делает недействительными ранее выданные токены. Незаполненный/короткий
+секрет — ошибка конфигурации входа и защищённых ручек, а не неверный пароль.
+JWT-настройки загружаются при первом обращении к этим ручкам; health и регистрация
+работают без JWT-настроек. Реальный секрет храните только в локальном `.env`/окружении.
+
+### Создание механика и менеджера
+
+Доступно оператору с доступом к серверу и БД, без публичного HTTP endpoint:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.cli create-staff --email mechanic@example.com --role mechanic
+.\.venv\Scripts\python.exe -m app.cli create-staff --email manager@example.com --role manager
+```
+
+Команда дважды запрашивает пароль скрытым вводом в интерактивном терминале. Пароль
+не передаётся аргументом командной строки; требования как у регистрации (8–128 символов).
+Коды завершения: `0` — создан; `1` — занят email или ошибка БД; `2` — неверный ввод.
+Повторный email не обновляет существующего пользователя и не повышает его роль.
+После создания сотрудник входит через тот же `POST /auth/login`.
+Текст PR и сценарии: `docs/pr/1.2-jwt-auth.md`.
+
 ## Команды разработчика
 
 ```powershell
@@ -157,6 +237,7 @@ python -m uv export --frozen --no-emit-project --format requirements-txt -o requ
 и ответов, ожидаемые статусы и сценарии для тестировщика.** Шаблон:
 `.github/pull_request_template.md`. Описание первого PR: `docs/pr/auth-service-setup.md`.
 Текст PR регистрации: `docs/pr/1.1-registration.md`. PR открывает автор проекта вручную.
+Текст PR JWT и ролей: `docs/pr/1.2-jwt-auth.md`.
 
 Критерии связанных User Story пока не предоставлены. Предложения для согласования:
 
@@ -175,3 +256,4 @@ python -m uv export --frozen --no-emit-project --format requirements-txt -o requ
 - [SQLAlchemy: PostgreSQL и psycopg](https://docs.sqlalchemy.org/en/20/dialects/postgresql.html#module-sqlalchemy.dialects.postgresql.psycopg)
 - [Ruff: интеграция с CI](https://docs.astral.sh/ruff/integrations/)
 - [FastAPI: хеширование паролей с pwdlib/Argon2](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/)
+- [PyJWT: подпись и проверка токенов](https://pyjwt.readthedocs.io/en/stable/usage.html)
