@@ -11,18 +11,22 @@
 
 ## Запуск (Windows / PowerShell)
 
-Нужны Python 3.13 и PostgreSQL 17 — локально или через Docker Desktop с Compose.
+Нужны [uv](https://docs.astral.sh/uv/) и PostgreSQL 17 — локально или через Docker Desktop
+с Compose. Подходящий Python (3.12–3.14) uv подберёт сам. `uv sync` создаёт `.venv`
+и ставит зависимости по `uv.lock`, включая dev-группу.
+
+Установка uv, если его ещё нет: `winget install --id=astral-sh.uv -e`
+или `python -m pip install uv`.
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+uv sync
 Copy-Item .env.example .env
 ```
 
 Сгенерируйте секрет подписи JWT и вставьте результат в поле `JWT_SECRET` файла `.env`:
 
 ```powershell
-.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(48))"
+uv run python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
 Не перезаписывайте существующий `.env`, если он уже настроен; добавьте новые поля вручную.
@@ -31,12 +35,13 @@ Copy-Item .env.example .env
 ```powershell
 docker compose up -d db
 docker compose ps
-.\.venv\Scripts\python.exe scripts/manage.py migrate
-.\.venv\Scripts\python.exe scripts/manage.py run
+uv run scripts/manage.py migrate
+uv run scripts/manage.py run
 ```
 
-Активация окружения и изменение ExecutionPolicy не нужны. В VS Code выберите
-`.venv` через Python: Select Interpreter. Для Linux/macOS используйте `.venv/bin/python`.
+Активация окружения не нужна: `uv run` использует `.venv` и синхронизирует его по `uv.lock`.
+Команды одинаковы на Windows, Linux и macOS. В VS Code выберите `.venv` через
+Python: Select Interpreter.
 
 Вместо Docker можно создать БД на существующем PostgreSQL и прописать `DATABASE_URL`
 в `.env`. Пароль в примере — только для локальной разработки. При изменении
@@ -172,8 +177,8 @@ JWT-настройки загружаются при первом обращен
 Доступно оператору с доступом к серверу и БД, без публичного HTTP endpoint:
 
 ```powershell
-.\.venv\Scripts\python.exe -m app.cli create-staff --email mechanic@example.com --role mechanic
-.\.venv\Scripts\python.exe -m app.cli create-staff --email manager@example.com --role manager
+uv run python -m app.cli create-staff --email mechanic@example.com --role mechanic
+uv run python -m app.cli create-staff --email manager@example.com --role manager
 ```
 
 Команда дважды запрашивает пароль скрытым вводом в интерактивном терминале. Пароль
@@ -185,7 +190,7 @@ JWT-настройки загружаются при первом обращен
 
 ### Профиль клиента — 1.3
 
-Примените миграцию `0002` командой `python scripts/manage.py migrate` из своего окружения.
+Примените миграцию `0002` командой `uv run scripts/manage.py migrate` из папки `backend`.
 Она добавляет nullable-поля `name`, `phone`; существующие аккаунты и реквизиты входа
 сохраняются. Имя и телефон нового/существующего клиента изначально равны `null`.
 При регистрации по-прежнему принимаются только email и пароль; профиль заполняется отдельно.
@@ -237,19 +242,19 @@ ID берётся из JWT; доступа к произвольному пол�
 }
 ```
 
-Откат `python -m alembic downgrade 0001` удаляет имя и телефон вместе с их значениями,
+Откат `uv run alembic downgrade 0001` удаляет имя и телефон вместе с их значениями,
 но сохраняет аккаунты. Для обычного запуска откат не нужен.
 Текст PR и сценарии проверки: `docs/pr/1.3-client-profile.md`.
 
 ## Команды разработчика
 
 ```powershell
-.\.venv\Scripts\python.exe scripts/manage.py check   # линтер + форматирование + тесты
-.\.venv\Scripts\python.exe scripts/manage.py test
-.\.venv\Scripts\python.exe scripts/manage.py lint
-.\.venv\Scripts\python.exe scripts/manage.py format  # изменяет файлы
-.\.venv\Scripts\python.exe scripts/manage.py migrate
-.\.venv\Scripts\python.exe -m pip wheel --no-deps --wheel-dir dist .
+uv run scripts/manage.py check   # линтер + форматирование + тесты
+uv run scripts/manage.py test
+uv run scripts/manage.py lint
+uv run scripts/manage.py format  # изменяет файлы
+uv run scripts/manage.py migrate
+uv build --wheel
 ```
 
 Локальные тесты используют изолированную SQLite in-memory, подготовленную через Alembic.
@@ -262,12 +267,13 @@ ID берётся из JWT; доступа к произвольному пол�
 в `requirements*.txt` для установки обычным pip. После изменения зависимостей:
 
 ```powershell
-python -m uv lock
-python -m uv export --frozen --no-dev --no-emit-project --format requirements-txt -o requirements.txt
-python -m uv export --frozen --no-emit-project --format requirements-txt -o requirements-dev.txt
+uv lock
+uv export --frozen --no-dev --no-emit-project --format requirements-txt -o requirements.txt
+uv export --frozen --no-emit-project --format requirements-txt -o requirements-dev.txt
 ```
 
-Для этих трёх команд нужен uv (`python -m pip install uv`). Для запуска сервиса он не нужен.
+`requirements*.txt` нужны только для установки без uv; для запуска и разработки
+используйте `uv sync` и `uv run`.
 
 ## Миграции
 
@@ -275,10 +281,10 @@ python -m uv export --frozen --no-emit-project --format requirements-txt -o requ
 Новые ORM-модели импортируются в `migrations/env.py` для заполнения metadata.
 
 ```powershell
-.\.venv\Scripts\python.exe -m alembic revision --autogenerate -m "describe change"
+uv run alembic revision --autogenerate -m "describe change"
 # Проверьте сгенерированный файл перед применением.
-.\.venv\Scripts\python.exe scripts/manage.py migrate
-.\.venv\Scripts\python.exe -m alembic check
+uv run scripts/manage.py migrate
+uv run alembic check
 ```
 
 ## Agile и Git

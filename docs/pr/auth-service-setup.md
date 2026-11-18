@@ -10,16 +10,15 @@ SQLAlchemy, Alembic, PostgreSQL в Compose, health API, команды разр�
 
 ## Подготовка проверки
 
-Ветка: `chore/auth-service-setup`. Python 3.13, PostgreSQL 17 или Docker Desktop.
-Из папки репозитория, PowerShell:
+Ветка: `chore/auth-service-setup`. Нужны uv и PostgreSQL 17 или Docker Desktop.
+Из папки `backend`, PowerShell:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+uv sync
 Copy-Item .env.example .env
 docker compose up -d db
-.\.venv\Scripts\python.exe scripts/manage.py migrate
-.\.venv\Scripts\python.exe scripts/manage.py run
+uv run scripts/manage.py migrate
+uv run scripts/manage.py run
 ```
 
 Настройки: `DATABASE_URL`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_PORT`.
@@ -71,15 +70,15 @@ Readiness не проверяет актуальность схемы. Ошиб�
 
 Проверено локально на Python 3.13.2:
 
-- `python scripts/manage.py check`: Ruff и форматирование проходят, **7 тестов проходят**.
+- `uv run scripts/manage.py check`: Ruff и форматирование проходят, **7 тестов проходят**.
 - Тесты пройдены на SQLite и на отдельном временном PostgreSQL **18.3**.
   Финальный прогон с PostgreSQL — без предупреждений.
-- `python scripts/manage.py migrate`: Alembic подключается к PostgreSQL без ошибок.
-- `python -m alembic check`: `No new upgrade operations detected`.
+- `uv run scripts/manage.py migrate`: Alembic подключается к PostgreSQL без ошибок.
+- `uv run alembic check`: `No new upgrade operations detected`.
 - Проверено через HTTP-интерфейс TestClient с реальным PostgreSQL:
   `/health/ready` → `200`; после остановки БД → `503` с ожидаемым JSON;
   `/health` при остановленной БД → `200`.
-- `python -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .`:
+- `uv build --wheel`:
   пакет `rps_auth_service-0.1.0-py3-none-any.whl` собирается.
 - `git diff --check`: ошибок нет.
 
