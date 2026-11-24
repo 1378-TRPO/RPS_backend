@@ -153,9 +153,11 @@ def test_invalid_service_values_rejected_on_create_and_update(
     url = f"{PATH}/{created.json()['id']}"
     invalid_fields = [
         {"name": " "},
+        {"name": "x" * 201},
         {"name": 0},
         {"name": None},
         {"description": "\t"},
+        {"description": "x" * 2001},
         {"description": None},
         {"description": "description\x00"},
         {"price": "0.00"},
@@ -195,6 +197,30 @@ def test_invalid_service_values_rejected_on_create_and_update(
     assert response.status_code == 422
     assert db.scalar(select(func.count()).select_from(Service)) == 1
     assert client.get(PATH, headers=manager_headers).json() == [created.json()]
+
+
+def test_service_text_limits_apply_after_trimming(
+    client: TestClient, manager_headers: dict[str, str]
+) -> None:
+    name, description = "Н" * 200, "О" * 2000
+    created = client.post(
+        PATH,
+        headers=manager_headers,
+        json={**SERVICE_DATA, "name": f" {name} ", "description": f" {description} "},
+    )
+    assert created.status_code == 201
+    assert created.json()["name"] == name
+    assert created.json()["description"] == description
+
+    name, description = "А" * 200, "Б" * 2000
+    updated = client.patch(
+        f"{PATH}/{created.json()['id']}",
+        headers=manager_headers,
+        json={"name": f" {name} ", "description": f" {description} "},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["name"] == name
+    assert updated.json()["description"] == description
 
 
 def test_numeric_price_preserves_exact_decimal_before_validating(
@@ -241,3 +267,7 @@ def test_manager_endpoints_are_documented(client: TestClient) -> None:
     assert set(schemas["ServiceCreate"]["required"]) == set(SERVICE_DATA)
     assert schemas["ServiceUpdate"]["minProperties"] == 1
     assert schemas["ServiceUpdate"]["additionalProperties"] is False
+    for request_model in ("ServiceCreate", "ServiceUpdate"):
+        fields = schemas[request_model]["properties"]
+        assert fields["name"]["maxLength"] == 200
+        assert fields["description"]["maxLength"] == 2000

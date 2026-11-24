@@ -27,9 +27,14 @@ def reject_extra_fractional_digits(value: Decimal) -> Decimal:
     return value
 
 
-ServiceText = Annotated[
+ServiceName = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1),
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=200),
+    AfterValidator(reject_null_character),
+]
+ServiceDescription = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=2000),
     AfterValidator(reject_null_character),
 ]
 ServicePrice = Annotated[
@@ -43,8 +48,8 @@ ServiceDuration = Annotated[int, Field(strict=True, gt=0, le=2**31 - 1)]
 class ServiceCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
-    name: ServiceText
-    description: ServiceText
+    name: ServiceName
+    description: ServiceDescription
     price: ServicePrice
     duration_minutes: ServiceDuration
 
@@ -54,8 +59,8 @@ class ServiceUpdate(BaseModel):
         extra="forbid", hide_input_in_errors=True, json_schema_extra={"minProperties": 1}
     )
 
-    name: ServiceText | SkipJsonSchema[None] = None
-    description: ServiceText | SkipJsonSchema[None] = None
+    name: ServiceName | SkipJsonSchema[None] = None
+    description: ServiceDescription | SkipJsonSchema[None] = None
     price: ServicePrice | SkipJsonSchema[None] = None
     duration_minutes: ServiceDuration | SkipJsonSchema[None] = None
 
