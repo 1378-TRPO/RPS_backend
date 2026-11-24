@@ -1,5 +1,5 @@
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -146,7 +146,12 @@ def test_staff_cannot_access_garage(
         {**VEHICLE, "year": "2020"},
         {**VEHICLE, "year": 2020.0},
         {**VEHICLE, "year": True},
+        {**VEHICLE, "year": 1899},
+        {**VEHICLE, "year": date.today().year + 2},
         {**VEHICLE, "year": 2**31},
+        {**VEHICLE, "make": "M" * 101},
+        {**VEHICLE, "model": "M" * 101},
+        {**VEHICLE, "plate": "P" * 33},
         {**VEHICLE, "client_id": "8193fe67-4f8d-418d-84bd-e102144301a8"},
         {**VEHICLE, "owner_id": None},
         {**VEHICLE, "id": None},
@@ -160,6 +165,25 @@ def test_invalid_vehicle_is_rejected_without_insert(
     assert db.scalar(select(func.count()).select_from(Vehicle)) == 0
 
 
+@pytest.mark.parametrize("year", [1900, date.today().year + 1])
+def test_vehicle_accepts_year_and_trimmed_length_limits(
+    client: TestClient, client_headers: dict[str, str], year: int
+) -> None:
+    make, model, plate = "M" * 100, "X" * 100, "P" * 32
+    response = client.post(
+        PATH,
+        headers=client_headers,
+        json={"make": f" {make} ", "model": f" {model} ", "year": year, "plate": f" {plate} "},
+    )
+    assert response.status_code == 201
+    assert {key: response.json()[key] for key in VEHICLE} == {
+        "make": make,
+        "model": model,
+        "year": year,
+        "plate": plate,
+    }
+
+
 def test_openapi_describes_garage_contract(client: TestClient) -> None:
     schema = client.get("/openapi.json").json()
     operation = schema["paths"][PATH]["post"]
@@ -168,6 +192,10 @@ def test_openapi_describes_garage_contract(client: TestClient) -> None:
     request = schema["components"]["schemas"]["VehicleCreate"]
     assert set(request["required"]) == set(VEHICLE)
     assert request["additionalProperties"] is False
+    assert request["properties"]["make"]["maxLength"] == 100
+    assert request["properties"]["model"]["maxLength"] == 100
+    assert request["properties"]["plate"]["maxLength"] == 32
+    assert request["properties"]["year"]["minimum"] == 1900
     response = schema["components"]["schemas"]["VehicleResponse"]
     assert set(response["properties"]) == {*VEHICLE, "id", "created_at"}
 
