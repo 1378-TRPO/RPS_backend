@@ -56,3 +56,46 @@ def test_profile_migration_preserves_existing_account(tmp_path: Path) -> None:
             command.check(config)
     finally:
         engine.dispose()
+
+
+def test_vehicle_migration_adds_owner_fk_and_preserves_accounts(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'garage_migration.db'}")
+    try:
+        with engine.begin() as connection:
+            config = Config("alembic.ini")
+            config.attributes["connection"] = connection
+            command.upgrade(config, "0002")
+            assert "vehicles" not in inspect(connection).get_table_names()
+            connection.execute(
+                text(
+                    "INSERT INTO users (id, email, password_hash, role) "
+                    "VALUES (:id, 'existing@example.com', :hash, 'client')"
+                ),
+                {"id": "b" * 32, "hash": "example-hash"},
+            )
+
+            command.upgrade(config, "0003")
+            schema = inspect(connection)
+            assert schema.get_pk_constraint("vehicles")["constrained_columns"] == ["id"]
+            [owner_fk] = schema.get_foreign_keys("vehicles")
+            assert owner_fk["constrained_columns"] == ["client_id"]
+            assert owner_fk["referred_table"] == "users"
+            assert owner_fk["referred_columns"] == ["id"]
+            assert {col["name"] for col in schema.get_columns("vehicles")} == {
+                "id",
+                "client_id",
+                "make",
+                "model",
+                "year",
+                "plate",
+                "created_at",
+            }
+            assert connection.scalar(text("SELECT email FROM users")) == "existing@example.com"
+
+            command.downgrade(config, "0002")
+            assert "vehicles" not in inspect(connection).get_table_names()
+            assert connection.scalar(text("SELECT email FROM users")) == "existing@example.com"
+            command.upgrade(config, "head")
+            command.check(config)
+    finally:
+        engine.dispose()
