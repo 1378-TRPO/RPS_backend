@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import require_roles
@@ -96,3 +97,27 @@ def add_vehicle(
     result = VehicleResponse.model_validate(vehicle)
     db.commit()
     return result
+
+
+@router.get(
+    "/me/vehicles",
+    response_model=list[VehicleResponse],
+    summary="Список автомобилей своего гаража",
+    description=(
+        "Клиент определяется по Bearer JWT. Новые записи идут первыми "
+        "(created_at DESC, при равенстве id DESC). Пустой гараж возвращает []."
+    ),
+    responses={
+        403: {"model": ErrorResponse, "description": "Гараж доступен только клиенту"},
+    },
+)
+def list_vehicles(
+    user: CurrentClient,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[VehicleResponse]:
+    statement = (
+        select(Vehicle)
+        .where(Vehicle.client_id == user.id)
+        .order_by(Vehicle.created_at.desc(), Vehicle.id.desc())
+    )
+    return [VehicleResponse.model_validate(vehicle) for vehicle in db.scalars(statement)]

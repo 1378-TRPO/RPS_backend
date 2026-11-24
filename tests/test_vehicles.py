@@ -1,5 +1,5 @@
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -100,26 +100,35 @@ def test_post_vehicle_saves_authenticated_client_id(
     assert str(vehicle.client_id) == owner.json()["id"]
 
 
+@pytest.mark.parametrize("method", ["GET", "POST"])
 @pytest.mark.parametrize("authorization", [None, "Bearer invalid"])
 def test_vehicle_requires_valid_jwt(
-    client: TestClient, db: Session, authorization: str | None
+    client: TestClient, db: Session, method: str, authorization: str | None
 ) -> None:
     headers = {"Authorization": authorization} if authorization else {}
-    response = client.post(PATH, json=VEHICLE, headers=headers)
+    response = client.request(
+        method, PATH, json=VEHICLE if method == "POST" else None, headers=headers
+    )
     assert response.status_code == 401
     assert response.headers["WWW-Authenticate"] == "Bearer"
     assert db.scalar(select(func.count()).select_from(Vehicle)) == 0
 
 
+@pytest.mark.parametrize("method", ["GET", "POST"])
 @pytest.mark.parametrize("role", [UserRole.MECHANIC, UserRole.MANAGER])
-def test_staff_cannot_add_vehicle(
-    client: TestClient, db: Session, auth_settings: AuthSettings, role: UserRole
+def test_staff_cannot_access_garage(
+    client: TestClient, db: Session, auth_settings: AuthSettings, method: str, role: UserRole
 ) -> None:
     staff = create_staff_user(
         db, RegisterRequest(email="staff@example.com", password=PASSWORD), role
     )
     token = create_access_token(staff.id, staff.role, auth_settings)
-    response = client.post(PATH, json=VEHICLE, headers={"Authorization": f"Bearer {token}"})
+    response = client.request(
+        method,
+        PATH,
+        json=VEHICLE if method == "POST" else None,
+        headers={"Authorization": f"Bearer {token}"},
+    )
     assert response.status_code == 403
     assert db.scalar(select(func.count()).select_from(Vehicle)) == 0
 
@@ -161,3 +170,74 @@ def test_openapi_describes_garage_contract(client: TestClient) -> None:
     assert request["additionalProperties"] is False
     response = schema["components"]["schemas"]["VehicleResponse"]
     assert set(response["properties"]) == {*VEHICLE, "id", "created_at"}
+
+    listing = schema["paths"][PATH]["get"]
+    assert listing["security"] == [{"HTTPBearer": []}]
+    assert not listing.get("parameters")
+    assert "requestBody" not in listing
+    assert {"200", "401", "403"} <= listing["responses"].keys()
+    list_schema = listing["responses"]["200"]["content"]["application/json"]["schema"]
+    assert list_schema["type"] == "array"
+    assert list_schema["items"]["$ref"] == "#/components/schemas/VehicleResponse"
+
+
+def test_empty_garage_returns_empty_array(
+    client: TestClient, client_headers: dict[str, str]
+) -> None:
+    response = client.get(PATH, headers=client_headers)
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_garage_list_orders_by_date_then_id_descending(
+    client: TestClient, db: Session, client_headers: dict[str, str]
+) -> None:
+    account = client.get("/auth/me", headers=client_headers)
+    assert account.status_code == 200
+    owner_id = UUID(account.json()["id"])
+    newer = datetime(2026, 11, 24, 10, tzinfo=UTC)
+    older = datetime(2026, 11, 23, 10, tzinfo=UTC)
+    db.add_all(
+        [
+            Vehicle(id=UUID(int=1), client_id=owner_id, created_at=newer, **VEHICLE),
+            Vehicle(id=UUID(int=3), client_id=owner_id, created_at=older, **VEHICLE),
+            Vehicle(id=UUID(int=2), client_id=owner_id, created_at=newer, **VEHICLE),
+        ]
+    )
+    db.commit()
+
+    response = client.get(PATH, headers=client_headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert [UUID(item["id"]).int for item in data] == [2, 1, 3]
+    assert all(set(item) == {*VEHICLE, "id", "created_at"} for item in data)
+    assert client.get(PATH, headers=client_headers).json() == data
+
+
+def test_garage_list_isolates_two_clients(
+    client: TestClient, db: Session, auth_settings: AuthSettings, client_headers: dict[str, str]
+) -> None:
+    other_client = register_client(
+        db, RegisterRequest(email="other-garage@example.com", password=PASSWORD)
+    )
+    other_token = create_access_token(other_client.id, other_client.role, auth_settings)
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+    own_vehicle = client.post(PATH, headers=client_headers, json=VEHICLE)
+    assert own_vehicle.status_code == 201
+
+    empty = client.get(PATH, headers=other_headers)
+    assert empty.status_code == 200
+    assert empty.json() == []
+
+    other_vehicle = client.post(PATH, headers=other_headers, json={**VEHICLE, "plate": "OTHER 2"})
+    assert other_vehicle.status_code == 201
+
+    own_list = client.get(
+        PATH,
+        headers=client_headers,
+        params={"client_id": str(other_client.id), "user_id": str(other_client.id)},
+    )
+    other_list = client.get(PATH, headers=other_headers)
+    assert own_list.status_code == other_list.status_code == 200
+    assert own_list.json() == [own_vehicle.json()]
+    assert other_list.json() == [other_vehicle.json()]
