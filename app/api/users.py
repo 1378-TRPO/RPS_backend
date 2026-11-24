@@ -17,7 +17,7 @@ router = APIRouter(
     tags=["Client profile"],
     responses={
         401: {"model": ErrorResponse, "description": "Нет действительного Bearer-токена"},
-        403: {"model": ErrorResponse, "description": "Профиль доступен только клиенту"},
+        403: {"model": ErrorResponse, "description": "Доступно только клиенту"},
     },
 )
 CurrentClient = Annotated[User, Depends(require_roles(UserRole.CLIENT))]
@@ -77,7 +77,8 @@ def patch_profile(
     summary="Добавление автомобиля в свой гараж",
     description=(
         "Клиент определяется по Bearer JWT. В запросе обязательны make, model, year и plate. "
-        "Краевые пробелы убираются. Год передаётся целым числом. "
+        "Краевые пробелы убираются. Марка и модель до 100 символов, госномер до 32. "
+        "Год передаётся целым числом от 1900 до текущего года + 1 включительно. "
         "Поля владельца в запросе запрещены. Формат госномера свободный."
     ),
     responses={
