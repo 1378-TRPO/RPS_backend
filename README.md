@@ -19,8 +19,8 @@
 или `python -m pip install uv`.
 
 ```powershell
-uv sync
-Copy-Item .env.example .env
+uv sync --locked
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
 Сгенерируйте секрет подписи JWT и вставьте результат в поле `JWT_SECRET` файла `.env`:
@@ -47,8 +47,9 @@ Python: Select Interpreter.
 в `.env`. Пароль в примере — только для локальной разработки. При изменении
 `POSTGRES_*` или порта синхронно измените `DATABASE_URL`. Переменные `POSTGRES_*`
 инициализируют новый том БД, но не меняют существующие аккаунты.
-Порт в примере — `5433`, чтобы не конфликтовать с локальным PostgreSQL на `5432`;
-хост — `127.0.0.1`, чтобы Windows не подставлял IPv6 `::1`.
+Compose публикует PostgreSQL на `127.0.0.1:5433` снаружи и слушает на `5432` внутри
+контейнера. Если у вас уже есть `.env` для этого Compose, обновите в нём `POSTGRES_PORT`
+и порт в `DATABASE_URL` вместе. Для отдельного сервера укажите его фактический адрес и порт.
 
 - Swagger UI: <http://127.0.0.1:8000/docs>
 - OpenAPI: <http://127.0.0.1:8000/openapi.json>
@@ -192,7 +193,7 @@ uv run python -m app.cli create-staff --email manager@example.com --role manager
 
 ### Профиль клиента — 1.3
 
-Примените миграцию `0002` командой `uv run scripts/manage.py migrate` из папки `backend`.
+Примените миграцию `0002` командой `uv run scripts/manage.py migrate` из корня репозитория.
 Она добавляет nullable-поля `name`, `phone`; существующие аккаунты и реквизиты входа
 сохраняются. Имя и телефон нового/существующего клиента изначально равны `null`.
 При регистрации по-прежнему принимаются только email и пароль; профиль заполняется отдельно.
