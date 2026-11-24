@@ -1,8 +1,12 @@
+from decimal import Decimal
 from pathlib import Path
+from uuid import UUID
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, select, text
+
+from app.models import Service
 
 
 def test_migration_upgrade_downgrade_and_upgrade(tmp_path: Path) -> None:
@@ -20,6 +24,58 @@ def test_migration_upgrade_downgrade_and_upgrade(tmp_path: Path) -> None:
             assert "users" not in inspect(connection).get_table_names()
             command.upgrade(config, "head")
             assert "users" in inspect(connection).get_table_names()
+    finally:
+        engine.dispose()
+
+
+def test_services_migration_defaults_and_downgrade(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'catalog_migration.db'}")
+    try:
+        with engine.begin() as connection:
+            config = Config("alembic.ini")
+            config.attributes["connection"] = connection
+            command.upgrade(config, "0003")
+            assert "services" not in inspect(connection).get_table_names()
+
+            command.upgrade(config, "0004")
+            schema = inspect(connection)
+            assert schema.get_pk_constraint("services")["constrained_columns"] == ["id"]
+            cols = {column["name"]: column for column in schema.get_columns("services")}
+            assert set(cols) == {
+                "id",
+                "name",
+                "description",
+                "price",
+                "duration_minutes",
+                "is_active",
+                "created_at",
+                "updated_at",
+            }
+            assert cols["price"]["type"].precision == 12
+            assert cols["price"]["type"].scale == 2
+
+            services = Service.__table__
+            connection.execute(
+                services.insert().values(
+                    id=UUID(int=1),
+                    name="Diagnostics",
+                    price=Decimal("1250.50"),
+                    duration_minutes=45,
+                )
+            )
+            record = connection.execute(select(services)).mappings().one()
+            assert record["price"] == Decimal("1250.50")
+            assert record["is_active"] is True
+            assert record["created_at"] == record["updated_at"]
+            assert record["created_at"] is not None
+
+            command.check(config)
+            command.downgrade(config, "0003")
+            tables = set(inspect(connection).get_table_names())
+            assert "services" not in tables
+            assert {"users", "vehicles"} <= tables
+            command.upgrade(config, "head")
+            command.check(config)
     finally:
         engine.dispose()
 
