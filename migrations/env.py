@@ -5,7 +5,7 @@ from sqlalchemy import Connection, create_engine, pool
 
 from app.core.config import get_settings
 from app.db.base import Base
-from app.models import User  # noqa: F401 -- register users table in metadata
+from app.models import User, Vehicle  # noqa: F401 -- register tables in metadata
 
 config = context.config
 if config.config_file_name is not None:

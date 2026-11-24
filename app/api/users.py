@@ -5,9 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import require_roles
 from app.db.session import get_db
-from app.models import User, UserRole
+from app.models import User, UserRole, Vehicle
 from app.schemas.auth import ErrorResponse
 from app.schemas.profile import ClientProfile, ProfileUpdate
+from app.schemas.vehicle import VehicleCreate, VehicleResponse
 from app.services.profile import update_client_profile
 from app.services.registration import EmailAlreadyRegisteredError
 
@@ -16,7 +17,7 @@ router = APIRouter(
     tags=["Client profile"],
     responses={
         401: {"model": ErrorResponse, "description": "Нет действительного Bearer-токена"},
-        403: {"model": ErrorResponse, "description": "Профиль доступен только клиенту"},
+        403: {"model": ErrorResponse, "description": "Доступно только клиенту"},
     },
 )
 CurrentClient = Annotated[User, Depends(require_roles(UserRole.CLIENT))]
@@ -67,3 +68,32 @@ def patch_profile(
             status_code=status.HTTP_409_CONFLICT, detail="Email already registered"
         ) from error
     return ClientProfile.model_validate(updated)
+
+
+@router.post(
+    "/me/vehicles",
+    response_model=VehicleResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Добавление автомобиля в свой гараж",
+    description=(
+        "Клиент определяется по Bearer JWT. В запросе обязательны make, model, year и plate. "
+        "Краевые пробелы убираются. Марка и модель до 100 символов, госномер до 32. "
+        "Год передаётся целым числом от 1900 до текущего года + 1 включительно. "
+        "Поля владельца в запросе запрещены. Формат госномера свободный."
+    ),
+    responses={
+        403: {"model": ErrorResponse, "description": "Добавление доступно только клиенту"},
+        422: {"description": "Некорректные, отсутствующие или лишние поля"},
+    },
+)
+def add_vehicle(
+    data: VehicleCreate,
+    user: CurrentClient,
+    db: Annotated[Session, Depends(get_db)],
+) -> VehicleResponse:
+    vehicle = Vehicle(client_id=user.id, **data.model_dump())
+    db.add(vehicle)
+    db.flush()
+    result = VehicleResponse.model_validate(vehicle)
+    db.commit()
+    return result
